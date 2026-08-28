@@ -1,4 +1,3 @@
-```markdown
 # Fully Parameterized UART Transmitter (UART_TX) Subsystem
 
 A synthesizable, parameterized **Universal Asynchronous Receiver-Transmitter (UART) Transmitter** designed and verified in **Verilog HDL**. The design converts parallel input data into a serial UART bitstream with configurable parity schemes, strict timing compliance, and robust handshaking.
