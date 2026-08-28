@@ -1,158 +1,95 @@
-# Fully Parameterized UART Transmitter (UART_TX) Subsystem
+# UART_TX
 
-A synthesizable, parameterized **Universal Asynchronous Receiver-Transmitter (UART) Transmitter** designed and verified in **Verilog HDL**. The design converts parallel input data into a serial UART bitstream with configurable parity schemes, strict timing compliance, and robust handshaking.
+A parameterized, synthesizable **UART Transmitter** implemented in Verilog HDL, verified with a self-checking testbench, and taken through a complete FPGA implementation flow (elaboration → synthesis → place & route → timing analysis).
 
----
+## Overview
 
-## 📑 Table of Contents
-- [Architecture Overview](#architecture-overview)
-- [Key Features](#key-features)
-- [FSM State Machine](#fsm-state-machine)
-- [Repository Structure](#repository-structure)
-- [Simulation & Verification](#simulation--verification)
-- [Synthesis & Timing Constraints](#synthesis--timing-constraints)
-
----
-
-## 🏛 Architecture Overview
-
-The transmitter subsystem is partitioned into four submodules orchestrated by a centralized top-level controller:
-
+`UART_TX` serializes an `N`-bit parallel data bus into a standard UART frame (Start bit → Data bits, LSB first → optional Parity bit → Stop bit). The design is built from four independent, reusable blocks connected through a top-level module.
 
 ```
-
-```
-                 +-----------------------------------+
-                 |              UART_TX              |
-                 |                                   |
-                 |  +-----------------------------+  |
-
-```
-
-P_INPUT ------------>|->|      Parity Calculator      |--|----> PARITY_BIT
-V_INPUT, P_EN, P_BIT |  +-----------------------------+  |          |
-|                                   |          |
-|  +-----------------------------+  |          v
-P_INPUT ------------>|->|          Serializer         |--|----> SER_DATA ---> +-------+
-V_INPUT, SER_EN ---->|->| (Shift Reg & Counter)       |--|----> SER_DONE      |       |
-|  +-----------------------------+  |          |         |  MUX  |---> TX_OUTPUT
-|                                   |          |         |       |
-|  +-----------------------------+  |          |         +-------+
-V_INPUT, P_EN ------>|->|       Main Controller       |--|----------+             ^
-CLK, RST ----------->|->|            (FSM)            |--|------------------------+ (SEL[1:0])
-|  +-----------------------------+  |
-|          |                        |
-|          v                        |
-|        BUSY                       |
-+-----------------------------------+
-
+                 ┌───────────────────┐
+   P_INPUT ─────►│                   │
+   V_INPUT ─────►│                   ├────► TX_OUTPUT
+   CLK     ─────►│      UART_TX      │
+   RST     ─────►│                   ├────► BUSY
+   P_EN    ─────►│                   │
+   P_BIT   ─────►│                   │
+                 └───────────────────┘
 ```
 
-* **Main Controller (FSM):** Implements a 5-state Moore machine controlling state sequencing (`IDLE`, `START`, `DATA`, `PARITY`, `STOP`), busy arbitration, and mux selection.
-* **Serializer:** Houses a parameterized shift-register and counter to serialize the $N$-bit parallel bus into a single-bit stream (`SER_DATA`), raising `SER_DONE` upon completion.
-* **Parity Calculator:** Computes dynamic parity bits using reduction XOR/XNOR logic based on the configured parity scheme.
-* **Multiplexer (MUX):** Directs the frame components (Start bit `'0'`, Serial Data, Parity bit, and Stop/IDLE line `'1'`) to `TX_OUTPUT`.
+### Ports
 
----
+| Signal      | Direction | Width      | Description                                              |
+|-------------|-----------|------------|------------------------------------------------------------|
+| `CLK`       | input     | 1          | System clock                                                |
+| `RST`       | input     | 1          | Asynchronous active-low reset                               |
+| `P_INPUT`   | input     | `WIDTH`    | Parallel data bus to transmit                                |
+| `V_INPUT`   | input     | 1          | Data-valid pulse — sampled for exactly 1 clock cycle          |
+| `P_EN`      | input     | 1          | Parity enable (0: disabled, 1: enabled)                       |
+| `P_BIT`     | input     | 1          | Parity mode when `P_EN=1` (0: even, 1: odd)                   |
+| `TX_OUTPUT` | output    | 1          | Serial line output (idles high)                              |
+| `BUSY`      | output    | 1          | High while a frame is being transmitted                       |
 
-## ✨ Key Features
+### Operational rules
 
-* **Parameterized Payload Width:** Default $8$-bit, scalable via the `WIDTH` parameter.
-* **Configurable Parity Modes:** Supports optional parity enabled/disabled via `P_EN`, with Even (`P_BIT = 0`) or Odd (`P_BIT = 1`) schemes.
-* **Asynchronous Active-Low Reset:** Dedicated `RST` to initialize internal registers and state pointers.
-* **Transaction Handshaking & Busy Protection:** Samples parallel data on single-cycle `V_INPUT` pulses and raises `BUSY = 1` to prevent data overwrites during active transfers.
-* **Idle State Line Stability:** Drives `TX_OUTPUT = 1` during idle periods to eliminate false start-bit triggers.
+- New data on `P_INPUT` is only latched while `V_INPUT` is high.
+- `V_INPUT` is a single-cycle pulse; the design ignores it while `BUSY=1`.
+- `TX_OUTPUT` idles high; the frame starts with a low Start bit.
+- Reset is asynchronous and active-low.
 
----
-
-## 🔄 FSM State Machine
-
-
-```
-
-```
-             +-------------------+
-             |       IDLE        |<--------------------+
-             +-------------------+                     |
-                       |                               |
-                       | (V_INPUT)                     |
-                       v                               |
-             +-------------------+                     |
-             |       START       |                     |
-             +-------------------+                     |
-                       |                               |
-                       v                               |
+## Repository structure
 
 ```
-
-+--------------->+-------------------+ (SER_DONE & P_EN)   |
-|                |       DATA        |---------------+     |
-| (!SER_DONE)    +-------------------+               |     |
-+----------------          |                         |     |
-| (SER_DONE & !P_EN)      |     |
-v                         v     |
-+-------------------+          +--------+ |
-|       STOP        |          | PARITY | |
-+-------------------+          +--------+ |
-^                         |     |
-+-------------------------+     |
-|                               |
-+-------------------------------+
-
-```
-
----
-
-## 📁 Repository Structure
-
-```text
+Code/
 ├── Constraints/
-│   └── UART_TX.sdc          # SDC Timing constraints (Clock, I/O delays, false paths)
+│   └── UART_TX.sdc        # Timing constraints (clock, I/O delays, false paths)
 ├── RTL/
-│   ├── FSM.v                # Finite State Machine controller
-│   ├── MUX.v                # 4-to-1 Multiplexer
-│   ├── Parity_Calculator.v  # Reduction XOR/XNOR Parity module
-│   ├── Serializer.v         # Shift register and bit counter
-│   └── UART_TX.v            # Top-level integration wrapper
+│   ├── FSM.v               # Main controller (IDLE → START → DATA → PARITY → STOP)
+│   ├── MUX.v                # Selects Start/Data/Parity/Stop bit onto TX_OUTPUT
+│   ├── Parity_Calculator.v  # Even/Odd parity generation
+│   ├── Serializer.v         # Parallel-to-serial shift register + done flag
+│   └── UART_TX.v            # Top-level integration
 ├── Script/
-│   └── run.do               # Automated QuestaSim / ModelSim simulation script
+│   └── run.do               # QuestaSim/ModelSim simulation script
 ├── Testbench/
-│   └── UART_TX_tb.v         # Self-checking Testbench
-├── .gitignore               # EDA temporary artifacts filter
-├── LICENSE                  # MIT License
-├── README.md                # Project documentation
-└── UART_TX.pdf              # Comprehensive design report & synthesis results
-
+│   └── UART_TX_tb.v         # Self-checking testbench
+├── .gitignore
+├── LICENSE
+├── README.md
+└── UART_TX.pdf              # Full project documentation (design + verification + implementation report)
 ```
 
----
+## Architecture
 
-## 🧪 Simulation & Verification
+The design is split into four core blocks, integrated in `UART_TX.v`:
 
-The self-checking Testbench (`UART_TX_tb.v`) verifies:
+- **FSM (Main Controller)** — drives the state machine (`IDLE`, `START`, `DATA`, `PARITY`, `STOP`), asserts `BUSY`, and generates the `SEL` control signal for the output mux and the `SER_EN` enable for the serializer.
+- **Serializer** — loads `P_INPUT` on `V_INPUT`, shifts it out one bit per clock while `SER_EN` is high, and raises `SER_DONE` once the last data bit has been shifted out.
+- **Parity_Calculator** — computes even/odd parity over `P_INPUT` using reduction XOR/XNOR.
+- **MUX** — routes the Start bit, serial data, parity bit, or Stop/idle level onto `TX_OUTPUT` based on `SEL`.
 
-1. **Scenario 1:** Transmission without Parity ($10$-bit UART frame: Start + 8 Data + Stop).
-2. **Scenario 2:** Transmission with Even Parity ($11$-bit frame: Start + 8 Data + Even Parity + Stop).
-3. **Scenario 3:** Transmission with Odd Parity ($11$-bit frame: Start + 8 Data + Odd Parity + Stop).
-4. **Scenario 4:** Reset recovery and input protection during active `BUSY` state.
+## Simulation
 
-### Running Simulation (QuestaSim / ModelSim)
+Simulated with **QuestaSim/ModelSim** using a self-checking testbench that compares `TX_OUTPUT` and `BUSY` against expected values on every clock edge, covering: no-parity frames, even-parity frames, and odd-parity frames.
 
-```bash
-vsim -do Script/run.do
-
+```tcl
+vlib work
+vlog Code/RTL/Parity_Calculator.v Code/RTL/Serializer.v Code/RTL/FSM.v Code/RTL/MUX.v Code/RTL/UART_TX.v Code/Testbench/UART_TX_tb.v
+vsim -voptargs=+acc work.UART_TX_tb
+add wave *
+run -all
 ```
 
----
+Or simply:
 
-## ⏱ Synthesis & Timing Constraints
-
-The design was constrained and analyzed using Synopsys Design Constraints (`SDC`):
-
-* **Target Clock Period:** $20.000\text{ ns}$ ($50\text{ MHz}$)
-* **Setup Slack:** $+10.390\text{ ns}$ (Timing Met)
-* **Hold Slack:** $+0.445\text{ ns}$ (Timing Met)
-
+```sh
+vsim -do Code/Script/run.do
 ```
 
-```
+## Implementation flow
+
+The design was carried through elaboration, synthesis, and place & route, with timing constraints defined in `Code/Constraints/UART_TX.sdc` (20 ns / 50 MHz clock, asynchronous reset excluded from timing, input/output delay budgets on all ports). Full elaborated/synthesized schematics, the placed-and-routed floorplan, setup/hold timing reports, and lint results are documented in [`UART_TX.pdf`](./UART_TX.pdf).
+
+## License
+
+See [`LICENSE`](./LICENSE).
